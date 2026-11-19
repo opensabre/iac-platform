@@ -1,0 +1,204 @@
+{
+  "status": "proposed_pending_human_approval",
+  "resourceRoles": "reuse exactly the source IQC resource roles; no additional roles",
+  "resources": [
+    {
+      "code": "iac:agent:chat",
+      "sourceRoleResource": "iqc:agent:manage",
+      "controller": "AgentChatTestController",
+      "handler": "chat"
+    },
+    {
+      "code": "iac:model:list",
+      "sourceRoleResource": "iqc:model:view",
+      "controller": "IacModelProfileController",
+      "handler": "list"
+    },
+    {
+      "code": "iac:model:create",
+      "sourceRoleResource": "iqc:model:manage",
+      "controller": "IacModelProfileController",
+      "handler": "create"
+    },
+    {
+      "code": "iac:model:update",
+      "sourceRoleResource": "iqc:model:manage",
+      "controller": "IacModelProfileController",
+      "handler": "update"
+    },
+    {
+      "code": "iac:model:enable",
+      "sourceRoleResource": "iqc:model:manage",
+      "controller": "IacModelProfileController",
+      "handler": "enable"
+    },
+    {
+      "code": "iac:model:disable",
+      "sourceRoleResource": "iqc:model:manage",
+      "controller": "IacModelProfileController",
+      "handler": "disable"
+    },
+    {
+      "code": "iac:model:test",
+      "sourceRoleResource": "iqc:model:test",
+      "controller": "IacModelProfileController",
+      "handler": "test"
+    },
+    {
+      "code": "iac:agent:list",
+      "sourceRoleResource": "iqc:agent:view",
+      "controller": "AgentController",
+      "handler": "agents"
+    },
+    {
+      "code": "iac:agent:create",
+      "sourceRoleResource": "iqc:agent:manage",
+      "controller": "AgentController",
+      "handler": "createAgent"
+    },
+    {
+      "code": "iac:agent:submit",
+      "sourceRoleResource": "iqc:agent:submit",
+      "controller": "AgentController",
+      "handler": "submitAgent"
+    },
+    {
+      "code": "iac:agent:approve",
+      "sourceRoleResource": "iqc:agent:approve",
+      "controller": "AgentController",
+      "handler": "publishAgent"
+    },
+    {
+      "code": "iac:agent:reject",
+      "sourceRoleResource": "iqc:agent:approve",
+      "controller": "AgentController",
+      "handler": "rejectAgent"
+    },
+    {
+      "code": "iac:agent:disable",
+      "sourceRoleResource": "iqc:agent:disable",
+      "controller": "AgentController",
+      "handler": "disableAgent"
+    },
+    {
+      "code": "iac:agent:version:list",
+      "sourceRoleResource": "iqc:agent:view",
+      "controller": "AgentController",
+      "handler": "agentVersions"
+    },
+    {
+      "code": "iac:agent:version:create",
+      "sourceRoleResource": "iqc:agent:version:manage",
+      "controller": "AgentController",
+      "handler": "createAgentVersion"
+    },
+    {
+      "code": "iac:agent:version:rollback",
+      "sourceRoleResource": "iqc:agent:version:rollback",
+      "controller": "AgentController",
+      "handler": "rollbackAgent"
+    },
+    {
+      "code": "iac:agent:version:compare",
+      "sourceRoleResource": "iqc:agent:view",
+      "controller": "AgentController",
+      "handler": "compareAgentVersions"
+    },
+    {
+      "code": "iac:agent-session:query",
+      "sourceRoleResource": "iqc:agent-session:query",
+      "controller": "AgentChatSessionQueryController",
+      "handler": "page"
+    },
+    {
+      "code": "iac:agent-session:agent-query",
+      "sourceRoleResource": "iqc:agent-session:agent-query",
+      "controller": "AgentChatSessionController",
+      "handler": "page"
+    },
+    {
+      "code": "iac:agent-session:detail",
+      "sourceRoleResource": "iqc:agent-session:detail",
+      "controller": "AgentChatSessionController",
+      "handler": "detail"
+    },
+    {
+      "code": "iac:skill:list",
+      "sourceRoleResource": "iqc:skill:view",
+      "controller": "IacSkillController",
+      "handler": "list"
+    },
+    {
+      "code": "iac:skill:create",
+      "sourceRoleResource": "iqc:skill:manage",
+      "controller": "IacSkillController",
+      "handler": "create"
+    },
+    {
+      "code": "iac:skill:update",
+      "sourceRoleResource": "iqc:skill:manage",
+      "controller": "IacSkillController",
+      "handler": "update"
+    },
+    {
+      "code": "iac:skill:enable",
+      "sourceRoleResource": "iqc:skill:manage",
+      "controller": "IacSkillController",
+      "handler": "enable"
+    },
+    {
+      "code": "iac:skill:disable",
+      "sourceRoleResource": "iqc:skill:manage",
+      "controller": "IacSkillController",
+      "handler": "disable"
+    },
+    {
+      "code": "iac:skill:versions",
+      "sourceRoleResource": "iqc:skill:view",
+      "controller": "IacSkillController",
+      "handler": "versions"
+    },
+    {
+      "code": "iac:skill:rollback",
+      "sourceRoleResource": "iqc:skill:manage",
+      "controller": "IacSkillController",
+      "handler": "rollback"
+    },
+    {
+      "code": "iac:mcp:discover",
+      "sourceRoleResource": "iqc:mcp:manage",
+      "controller": "IacMcpServerController",
+      "handler": "discover"
+    },
+    {
+      "code": "iac:mcp:list",
+      "sourceRoleResource": "iqc:mcp:view",
+      "controller": "IacMcpServerController",
+      "handler": "list"
+    },
+    {
+      "code": "iac:mcp:create",
+      "sourceRoleResource": "iqc:mcp:manage",
+      "controller": "IacMcpServerController",
+      "handler": "create"
+    },
+    {
+      "code": "iac:mcp:update",
+      "sourceRoleResource": "iqc:mcp:manage",
+      "controller": "IacMcpServerController",
+      "handler": "update"
+    },
+    {
+      "code": "iac:mcp:enable",
+      "sourceRoleResource": "iqc:mcp:manage",
+      "controller": "IacMcpServerController",
+      "handler": "enable"
+    },
+    {
+      "code": "iac:mcp:disable",
+      "sourceRoleResource": "iqc:mcp:manage",
+      "controller": "IacMcpServerController",
+      "handler": "disable"
+    }
+  ]
+}

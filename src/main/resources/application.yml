@@ -1,0 +1,92 @@
+server:
+  port: ${SERVER_PORT:8050}
+
+spring:
+  # Database changes are executed by the dedicated release migration process, never by app pods.
+  flyway:
+    enabled: false
+  application:
+    name: iac-platform
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${REGISTER_HOST:localhost}:${REGISTER_PORT:8848}
+        ip: ${NACOS_DISCOVERY_IP:}
+        metadata:
+          management.host: ${MANAGEMENT_SERVER_HOST:${spring.application.name}}
+          management.port: ${MANAGEMENT_SERVER_PORT:18090}
+          management.scheme: ${MANAGEMENT_SERVER_SCHEME:http}
+      config:
+        server-addr: ${REGISTER_HOST:localhost}:${REGISTER_PORT:8848}
+        file-extension: yml
+  config:
+    import: optional:nacos:${OPENSABRE_COMMON_CONFIG_DATA_ID:opensabre-common.yml}?group=${OPENSABRE_COMMON_CONFIG_GROUP:DEFAULT_GROUP}&refreshEnabled=true
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:${DATASOURCE_DBTYPE:mysql}://${DATASOURCE_HOST:localhost}:${DATASOURCE_PORT:3306}/iac_platform?characterEncoding=UTF-8&useUnicode=true&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${DATASOURCE_USERNAME:root}
+    password: ${DATASOURCE_PASSWORD:root123}
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${AUTH_ISSUER_URI:${opensabre.oauth2.issuer-uri:http://base-authorization:8000}}
+
+opensabre:
+  governance:
+    sysadmin:
+      service-id: ${SYSADMIN_SERVICE_ID:base-sysadmin}
+    usage:
+      transport: ${GOVERNANCE_USAGE_TRANSPORT:EDA}
+    audit:
+      enabled: true
+    dictionary:
+      enabled: true
+      registration-enabled: ${DICTIONARY_REGISTRATION_ENABLED:true}
+    error-catalog:
+      enabled: true
+  resource-registration:
+    enabled: ${RESOURCE_REGISTRATION_ENABLED:true}
+
+jasypt:
+  encryptor:
+    password: ${JASYPT_ENCRYPTOR_PASSWORD:?JASYPT_ENCRYPTOR_PASSWORD is required}
+
+mybatis-plus:
+  global-config:
+    db-config:
+      table-prefix: iac_
+
+iac:
+  organization:
+    service-id: ${ORGANIZATION_SERVICE_ID:base-organization}
+  consumer:
+    allowed-services: ${IAC_CONSUMER_ALLOWED_SERVICES:iqc-platform}
+
+logging:
+  level:
+    io.github.opensabre.iac: INFO
+  pattern:
+    level: '%5p [${spring.application.name:},%X{traceId:-},%X{spanId:-},%X{parentSpanId:-}]'
+
+management:
+  server:
+    port: ${MANAGEMENT_SERVER_PORT:18090}
+    ssl:
+      enabled: ${MANAGEMENT_SERVER_SSL_ENABLED:false}
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,internalTokenKeyStatus,opensabreGovernanceRegistration
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when_authorized
+  metrics:
+    tags:
+      application: ${spring.application.name}

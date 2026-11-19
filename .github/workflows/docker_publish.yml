@@ -1,0 +1,168 @@
+name: Test, Build and Push with Jib
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: iac-platform-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  database-migrations:
+    name: Flyway MySQL
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0.34
+        env:
+          MYSQL_ROOT_PASSWORD: isolated-ci-only
+          MYSQL_DATABASE: iac_migration_ci
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -pisolated-ci-only"
+          --health-interval 5s --health-timeout 3s --health-retries 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Validate migration layout
+        run: python3 scripts/check-migrations.py
+      - name: Fresh baseline, validation and repeat migration
+        env:
+          FLYWAY_URL: jdbc:mysql://127.0.0.1:3306/iac_migration_ci?allowPublicKeyRetrieval=true&useSSL=false
+          FLYWAY_USER: root
+          FLYWAY_PASSWORD: isolated-ci-only
+        run: |
+          docker run --rm --network host -e FLYWAY_URL -e FLYWAY_USER -e FLYWAY_PASSWORD \
+            -v "$PWD/src/main/resources/db/migration/mysql:/flyway/sql:ro" \
+            redgate/flyway:11.18.0 -locations=filesystem:/flyway/sql migrate
+          docker run --rm --network host -e FLYWAY_URL -e FLYWAY_USER -e FLYWAY_PASSWORD \
+            -v "$PWD/src/main/resources/db/migration/mysql:/flyway/sql:ro" \
+            redgate/flyway:11.18.0 -locations=filesystem:/flyway/sql validate
+          docker run --rm --network host -e FLYWAY_URL -e FLYWAY_USER -e FLYWAY_PASSWORD \
+            -v "$PWD/src/main/resources/db/migration/mysql:/flyway/sql:ro" \
+            redgate/flyway:11.18.0 -locations=filesystem:/flyway/sql -outputType=json migrate > repeat.json
+          python3 -c 'import json; assert json.load(open("repeat.json"))["migrationsExecuted"] == 0'
+
+  test:
+    name: Maven Verify
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7.0.1
+      - name: Checkout OpenSabre Framework
+        uses: actions/checkout@v7.0.1
+        with:
+          repository: opensabre/opensabre-framework
+          ref: v1.1.4
+          path: opensabre-framework
+      - name: Set up JDK
+        uses: actions/setup-java@v5.6.0
+        with:
+          java-version: "25"
+          distribution: temurin
+          cache: maven
+      - name: Install OpenSabre Framework 1.1.4
+        run: mvn --batch-mode --no-transfer-progress -f opensabre-framework/pom.xml -DskipTests install
+      - name: Run tests
+        run: mvn --batch-mode --no-transfer-progress verify
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: iac-platform-test-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            target/surefire-reports/
+            target/failsafe-reports/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  build-and-push:
+    name: Build and Push Image
+    if: github.event_name == 'push'
+    needs: [test, database-migrations]
+    runs-on: ubuntu-latest
+    env:
+      REGISTRY_URL: "ccr.ccs.tencentyun.com/opensabre"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7.0.1
+      - name: Checkout OpenSabre Framework
+        uses: actions/checkout@v7.0.1
+        with:
+          repository: opensabre/opensabre-framework
+          ref: v1.1.4
+          path: opensabre-framework
+      - name: Set up JDK
+        uses: actions/setup-java@v5.6.0
+        with:
+          java-version: "25"
+          distribution: temurin
+          cache: maven
+      - name: Install OpenSabre Framework 1.1.4
+        run: mvn --batch-mode --no-transfer-progress -f opensabre-framework/pom.xml -DskipTests install
+      - name: Resolve image tags
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_name="${REGISTRY_URL}/${GITHUB_REPOSITORY#*/}"
+          short_sha="${GITHUB_SHA:0:7}"
+          sha_tag="sha-${short_sha}"
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+              echo "Release tag must use SemVer, for example v1.2.3 or v1.2.3-rc.1" >&2
+              exit 1
+            fi
+
+            project_version="$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)"
+            if [[ "${project_version}" != "${version}" ]]; then
+              echo "Git tag version ${version} does not match pom.xml version ${project_version}" >&2
+              exit 1
+            fi
+
+            target_tag="${version}"
+            if [[ "${version}" == *-* ]]; then
+              additional_tags="${sha_tag}"
+            else
+              major_minor="${version%.*}"
+              additional_tags="${major_minor},latest,${sha_tag}"
+            fi
+          else
+            target_tag="main"
+            additional_tags="${sha_tag}"
+          fi
+
+          echo "target_image=${image_name}:${target_tag}" >> "${GITHUB_OUTPUT}"
+          echo "additional_tags=${additional_tags}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build and push with Jib
+        run: >-
+          mvn --batch-mode --no-transfer-progress
+          -DskipTests
+          compile
+          jib:build
+          -Djib.to.image=${{ steps.image.outputs.target_image }}
+          -Djib.to.tags=${{ steps.image.outputs.additional_tags }}
+          -Dsecret.id=${{ secrets.DOCKER_CLOUD_SECRET_ID }}
+          -Dsecret.key=${{ secrets.DOCKER_CLOUD_SECRET_KEY }}
