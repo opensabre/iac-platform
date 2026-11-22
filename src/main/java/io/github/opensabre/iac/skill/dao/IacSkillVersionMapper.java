@@ -1,0 +1,8 @@
+package io.github.opensabre.iac.skill.dao;
+
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import io.github.opensabre.iac.skill.model.IacSkillVersion;
+import org.apache.ibatis.annotations.Mapper;
+
+@Mapper
+public interface IacSkillVersionMapper extends BaseMapper<IacSkillVersion> { }
