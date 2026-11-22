@@ -162,6 +162,8 @@ jobs:
           -DskipTests
           compile
           jib:build
+          -Djib.from.platforms=linux/amd64,linux/arm64
+          -Djib.jvm.stack-size=512k
           -Djib.to.image=${{ steps.image.outputs.target_image }}
           -Djib.to.tags=${{ steps.image.outputs.additional_tags }}
           -Dsecret.id=${{ secrets.DOCKER_CLOUD_SECRET_ID }}
