@@ -36,7 +36,7 @@ class IacMigrationMysqlIT {
         original.migrate(); original.validate();
         var destination = Flyway.configure().dataSource(SERVER+target+OPTIONS,"root","")
                 .locations("classpath:db/migration/mysql").load();
-        assertThat(destination.migrate().migrationsExecuted).isEqualTo(1);
+        assertThat(destination.migrate().migrationsExecuted).isEqualTo(2);
         destination.validate(); assertThat(destination.migrate().migrationsExecuted).isZero();
         try (var connection = DriverManager.getConnection(SERVER+source+OPTIONS,"root",""); var statement = connection.createStatement()) {
             // Include text resembling source table names to catch unsafe global SQL replacements.
@@ -63,6 +63,17 @@ class IacMigrationMysqlIT {
         String refusal = new String(noConfirmation.getInputStream().readAllBytes());
         assertThat(noConfirmation.waitFor()).isEqualTo(1); assertThat(refusal).contains("Stop source");
         command.add("--confirm-source-writes-stopped");
+        try (var connection = DriverManager.getConnection(SERVER+source+OPTIONS,"root",""); var statement = connection.createStatement()) {
+            statement.execute("ALTER TABLE iqc_model_profile ADD COLUMN pricing_json TEXT, ADD COLUMN max_output_tokens INT, ADD COLUMN output_token_parameter VARCHAR(32), ADD COLUMN context_window_tokens INT, ADD COLUMN deployment_ref VARCHAR(128)");
+            statement.execute("UPDATE iqc_model_profile SET max_output_tokens = 100 WHERE id = 'model-a'");
+        }
+        var unsupported = new ProcessBuilder(command).redirectErrorStream(true).start();
+        String unsupportedOutput = new String(unsupported.getInputStream().readAllBytes());
+        assertThat(unsupported.waitFor()).isEqualTo(1);
+        assertThat(unsupportedOutput).contains("compatibility fields");
+        try (var connection = DriverManager.getConnection(SERVER+source+OPTIONS,"root",""); var statement = connection.createStatement()) {
+            statement.execute("UPDATE iqc_model_profile SET max_output_tokens = NULL WHERE id = 'model-a'");
+        }
         var imported = new ProcessBuilder(command).redirectErrorStream(true).start();
         String output = new String(imported.getInputStream().readAllBytes());
         assertThat(imported.waitFor()).as(output).isZero();

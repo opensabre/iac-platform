@@ -67,8 +67,19 @@ def migrate(args):
     before = {}
     for old, new in TABLES.items():
         source_fields, target_fields = columns(args, 'source', old), columns(args, 'target', new)
-        if source_fields != target_fields:
+        compatibility_fields = [
+            'pricing_json', 'max_output_tokens', 'output_token_parameter',
+            'context_window_tokens', 'deployment_ref',
+        ] if old == 'iqc_model_profile' else []
+        older_source = bool(compatibility_fields) and target_fields == source_fields + compatibility_fields
+        if source_fields != target_fields and not older_source:
             raise RuntimeError('Source/target schema column mismatch: ' + old)
+        if compatibility_fields and all(column in source_fields for column in compatibility_fields):
+            populated = ' OR '.join(identifier(column) + ' IS NOT NULL' for column in compatibility_fields)
+            count = query(args.mysql, args.source_defaults_file, args.source_database,
+                          'SELECT COUNT(*) FROM ' + identifier(old) + ' WHERE ' + populated + ';')
+            if int(count):
+                raise RuntimeError('Source model has compatibility fields that IAC does not yet support')
         fields[old] = source_fields
         before[old] = fingerprint(args, 'source', old, source_fields)
         if fingerprint(args, 'target', new, target_fields)['rows']:
