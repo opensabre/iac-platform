@@ -18,9 +18,10 @@ public class ConsumerAccess {
         this.consumers = Set.copyOf(consumers);
     }
 
-    public void requireConsumer() {
+    public String requireConsumer() {
         var claims = context.currentClaims();
         if (claims == null || !consumers.contains(claims.source()))
             throw IacException.accessDenied("仅允许已授权的内部业务服务调用");
+        return claims.source();
     }
 }

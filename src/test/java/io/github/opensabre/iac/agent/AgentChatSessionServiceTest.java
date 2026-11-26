@@ -6,6 +6,7 @@ import io.github.opensabre.iac.agent.dao.AgentVersionMapper;
 import io.github.opensabre.iac.agent.model.AgentChatSession;
 import io.github.opensabre.iac.agent.model.AgentVersion;
 import io.github.opensabre.iac.shared.IacDataScope;
+import io.github.opensabre.iac.invocation.InvocationHistory;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
 import org.mockito.ArgumentCaptor;
@@ -22,11 +23,15 @@ class AgentChatSessionServiceTest {
     final AgentChatTestService engine = mock(AgentChatTestService.class);
     final IacDataScope scope = mock(IacDataScope.class);
     final ObjectMapper json = new ObjectMapper();
-    final AgentChatSessionService service = new AgentChatSessionService(sessions, versions, engine, scope, json);
+    final InvocationHistory invocations = mock(InvocationHistory.class);
+    final InvocationHistory.Execution execution = mock(InvocationHistory.Execution.class);
+    final AgentChatSessionService service = new AgentChatSessionService(sessions, versions, engine, scope, json, invocations);
     final AgentChatTestService.Result reply = new AgentChatTestService.Result("Hello", 12, "model-a", List.of("lookup"));
     final String config = "{\"schemaVersion\":\"3.0\"}";
 
     @BeforeEach void initializeMapperMetadata() {
+        when(invocations.start(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(execution);
+        when(execution.requestId()).thenReturn("request-1");
         com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
                 new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "chat-session-test"),
                 AgentChatSession.class);
@@ -44,7 +49,7 @@ class AgentChatSessionServiceTest {
     AgentChatSession existing() throws Exception {
         savedVersion();
         var session = new AgentChatSession(); session.setId("session-1"); session.setAgentId("agent-1");
-        session.setOwner("alice"); session.setVersionNo(2); session.setMessageCount(2);
+        session.setOwner("alice"); session.setSource("TEST"); session.setVersionNo(2); session.setMessageCount(2);
         session.setConfigHash(HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(config.getBytes(StandardCharsets.UTF_8))));
         session.setMessagesJson(json.writeValueAsString(List.of(
                 new AgentChatSessionService.SavedMessage("user", "First", "time", null, null, List.of()),
@@ -59,12 +64,12 @@ class AgentChatSessionServiceTest {
 
     @Test void temporaryChatDoesNotPersist() {
         var request = new AgentChatTestService.Request(config, List.of(user("Hi")));
-        when(engine.chat(request)).thenReturn(reply);
+        when(engine.chat(eq(request), same(execution))).thenReturn(reply);
         assertThat(service.chat(request).sessionId()).isNull();
         verifyNoInteractions(sessions, versions);
     }
     @Test void createsHistoryWithTrustedIdentityAndOnlySuccessfulPair() throws Exception {
-        savedVersion(); when(engine.chat(any())).thenReturn(reply); when(scope.groupId()).thenReturn("team-a");
+        savedVersion(); when(engine.chat(any(), same(execution))).thenReturn(reply); when(scope.groupId()).thenReturn("team-a");
         doAnswer(call -> { ((AgentChatSession) call.getArgument(0)).setId("generated"); return 1; }).when(sessions).insert(any(AgentChatSession.class));
         assertThat(service.chat(request(null, List.of(user("First")))).sessionId()).isEqualTo("generated");
         var capture = ArgumentCaptor.forClass(AgentChatSession.class); verify(sessions).insert(capture.capture());
@@ -74,11 +79,12 @@ class AgentChatSessionServiceTest {
         assertThat(session.getMessageCount()).isEqualTo(2); assertThat(session.getTitle()).isEqualTo("First");
         var messages = json.readTree(session.getMessagesJson());
         assertThat(messages.size()).isEqualTo(2); assertThat(messages.get(1).get("model").asText()).isEqualTo("model-a");
+        assertThat(messages.get(1).get("requestId").asText()).isEqualTo("request-1");
         assertThat(messages.get(1).get("calledTools").get(0).asText()).isEqualTo("lookup");
         assertThat(session.getMessagesJson()).doesNotContain("schemaVersion", "configHash");
     }
     @Test void appendsSecondPairAndKeepsOriginalSession() throws Exception {
-        existing(); when(engine.chat(any())).thenReturn(reply); when(sessions.update(isNull(), any())).thenReturn(1);
+        existing(); when(engine.chat(any(), same(execution))).thenReturn(reply); when(sessions.update(isNull(), any())).thenReturn(1);
         assertThat(service.chat(request("session-1", continuation())).sessionId()).isEqualTo("session-1");
         verify(sessions).update(isNull(), any()); verify(sessions, never()).insert(any(AgentChatSession.class));
     }
@@ -100,11 +106,11 @@ class AgentChatSessionServiceTest {
         verifyNoInteractions(engine);
     }
     @Test void handlesConcurrentAppendWithoutOverwritingWinner() throws Exception {
-        existing(); when(engine.chat(any())).thenReturn(reply); when(sessions.update(isNull(), any())).thenReturn(0);
+        existing(); when(engine.chat(any(), same(execution))).thenReturn(reply); when(sessions.update(isNull(), any())).thenReturn(0);
         assertThatThrownBy(() -> service.chat(request("session-1", continuation()))).hasMessageContaining("会话已更新");
     }
     @Test void failedModelDoesNotCreateSuccessfulHistory() {
-        savedVersion(); when(engine.chat(any())).thenThrow(new IllegalStateException("offline"));
+        savedVersion(); when(engine.chat(any(), same(execution))).thenThrow(new IllegalStateException("offline"));
         assertThatThrownBy(() -> service.chat(request(null, List.of(user("Hi"))))).hasMessage("offline");
         verifyNoInteractions(sessions);
     }
@@ -117,6 +123,19 @@ class AgentChatSessionServiceTest {
         existing(); var detail = service.detail("agent-1", "session-1");
         assertThat(detail.messages()).hasSize(2); assertThat(detail.session().owner()).isEqualTo("alice");
         assertThat(json.writeValueAsString(detail)).doesNotContain("configHash", "messagesJson");
+    }
+    @Test void managementViewMasksRecognizableSensitiveTextWithoutRewritingHistory() throws Exception {
+        var session = existing();
+        String text = "Contact someone@example.com, phone 13800138000, api_key=some-key";
+        session.setTitle(text);
+        session.setMessagesJson(json.writeValueAsString(List.of(
+                new AgentChatSessionService.SavedMessage("user", text, "time", null, null, List.of()))));
+
+        var detail = service.detail("agent-1", "session-1");
+
+        assertThat(detail.session().title()).doesNotContain("someone@example.com", "13800138000", "some-key");
+        assertThat(detail.messages().getFirst().content()).isEqualTo(detail.session().title());
+        assertThat(session.getMessagesJson()).contains("someone@example.com", "13800138000", "some-key");
     }
     @Test void savedSessionCannotBeUsedForTemporaryConfiguration() {
         var request = new AgentChatTestService.Request(config, List.of(user("Hi")), null, null, "session-1");

@@ -65,6 +65,7 @@ def migrate(args):
             raise ValueError('Credential files must exist with owner-only permissions')
     fields = {}
     before = {}
+    backfill_session_caller = False
     for old, new in TABLES.items():
         source_fields, target_fields = columns(args, 'source', old), columns(args, 'target', new)
         compatibility_fields = [
@@ -72,6 +73,9 @@ def migrate(args):
             'context_window_tokens', 'deployment_ref',
         ] if old == 'iqc_model_profile' else []
         older_source = bool(compatibility_fields) and target_fields == source_fields + compatibility_fields
+        if old == 'iqc_agent_chat_session' and target_fields == source_fields + ['caller']:
+            older_source = True
+            backfill_session_caller = True
         if source_fields != target_fields and not older_source:
             raise RuntimeError('Source/target schema column mismatch: ' + old)
         if compatibility_fields and all(column in source_fields for column in compatibility_fields):
@@ -98,8 +102,11 @@ def migrate(args):
     text = dump.stdout.decode()
     pattern = re.compile(r'(?m)^(INSERT INTO )`(' + '|'.join(TABLES) + r')`')
     text = pattern.sub(lambda match: match.group(1) + identifier(TABLES[match.group(2)]), text)
+    backfill = ""
+    if backfill_session_caller:
+        backfill = "\nUPDATE iac_agent_chat_session SET caller = owner WHERE source = 'TEST' AND caller IS NULL;"
     query(args.mysql, args.target_defaults_file, args.target_database,
-          'START TRANSACTION;\n' + text + '\nCOMMIT;\n')
+          'START TRANSACTION;\n' + text + backfill + '\nCOMMIT;\n')
     proof = {}
     for old, new in TABLES.items():
         actual = fingerprint(args, 'target', new, fields[old])

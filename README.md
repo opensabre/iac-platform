@@ -15,6 +15,7 @@ python3 scripts/check-migrations.py
 
 - [边界与拆分设计](docs/extraction-design.md)
 - [部署与数据切换](docs/deployment.md)
+- [对外调用与会话查询](docs/agent-invocation-api.md)
 - [待审批权限映射](docs/permission-mapping.json)
 
 本地验证不等同于发布。共享服务配置变更和线上数据切换需要按项目规则审批。

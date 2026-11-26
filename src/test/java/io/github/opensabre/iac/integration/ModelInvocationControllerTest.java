@@ -1,6 +1,9 @@
 package io.github.opensabre.iac.integration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.opensabre.iac.invocation.InvocationHistory;
+import io.github.opensabre.iac.shared.IacDataScope;
+import org.junit.jupiter.api.BeforeEach;
 import io.github.opensabre.iac.result.llm.SnapshotChatModelRouter;
 import io.github.opensabre.iac.result.llm.SnapshotMcpToolProvider;
 import org.junit.jupiter.api.Test;
@@ -21,7 +24,18 @@ class ModelInvocationControllerTest {
     private final ConsumerAccess access = mock(ConsumerAccess.class);
     private final SnapshotChatModelRouter models = mock(SnapshotChatModelRouter.class);
     private final SnapshotMcpToolProvider tools = mock(SnapshotMcpToolProvider.class);
-    private final ModelInvocationController controller = new ModelInvocationController(access,models,tools,json);
+    private final InvocationHistory history = mock(InvocationHistory.class);
+    private final InvocationHistory.Execution execution = mock(InvocationHistory.Execution.class);
+    private final ModelInvocationController controller = new ModelInvocationController(access, models, tools, json,
+            history, mock(IacDataScope.class));
+
+    @BeforeEach
+    void configureHistory() {
+        when(access.requireConsumer()).thenReturn("iqc-platform");
+        when(history.start(eq("INTERNAL"), eq("iqc-platform"), isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                .thenReturn(execution);
+        when(execution.requestId()).thenReturn("request-1");
+    }
     private ModelInvocationController.Request request() throws Exception {
         return new ModelInvocationController.Request(json.readTree("""
                 {"configJson":{"schemaVersion":"3.0","assetSnapshots":{"primaryModel":{}}},
@@ -33,26 +47,28 @@ class ModelInvocationControllerTest {
         var request = request();
         var response = new ChatResponse(List.of(new Generation(new AssistantMessage("answer"))),
                 ChatResponseMetadata.builder().model("provider-model").usage(new DefaultUsage(0,17)).build());
-        when(models.call(any(Prompt.class),same(request.snapshot()))).thenReturn(response);
+        when(models.call(any(Prompt.class),same(request.snapshot()), any(), same(execution))).thenReturn(response);
         var reply = controller.invoke(request);
         assertThat(reply.content()).isEqualTo("answer");
         assertThat(reply.model()).isEqualTo("provider-model");
         assertThat(reply.inputTokens()).isZero(); assertThat(reply.outputTokens()).isEqualTo(17);
+        assertThat(reply.requestId()).isEqualTo("request-1");
+        verify(execution).succeeded(response);
         verify(access).requireConsumer();
         var prompt = org.mockito.ArgumentCaptor.forClass(Prompt.class);
-        verify(models).call(prompt.capture(),same(request.snapshot()));
+        verify(models).call(prompt.capture(),same(request.snapshot()), any(), same(execution));
         assertThat(prompt.getValue().getInstructions()).extracting(message -> message.getText())
                 .containsExactly("instructions","question");
         assertThat(request.snapshot().path("taskOverrides").path("temperature").asDouble()).isZero();
         verifyNoInteractions(tools);
     }
     @Test void absentUsageStaysUnknown() throws Exception {
-        when(models.call(any(Prompt.class),any())).thenReturn(new ChatResponse(List.of(new Generation(new AssistantMessage("answer")))));
+        when(models.call(any(Prompt.class), any(), any(), same(execution))).thenReturn(new ChatResponse(List.of(new Generation(new AssistantMessage("answer")))));
         var reply = controller.invoke(request());
         assertThat(reply.inputTokens()).isNull(); assertThat(reply.outputTokens()).isNull();
     }
     @Test void rejectsUntrustedRequestsBeforeModelOrMcpAccess() throws Exception {
-        doThrow(new IllegalStateException("untrusted")).when(access).requireConsumer();
+        when(access.requireConsumer()).thenThrow(new IllegalStateException("untrusted"));
         assertThatThrownBy(() -> controller.invoke(request())).hasMessage("untrusted");
         verifyNoInteractions(models,tools);
     }
