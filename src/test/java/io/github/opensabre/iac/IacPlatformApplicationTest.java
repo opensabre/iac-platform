@@ -7,6 +7,25 @@ import io.github.opensabre.governance.audit.aspect.AuditAspect;
 import io.github.opensabre.governance.dictionary.DictionaryProvider;
 import io.github.opensabre.governance.registration.GovernanceRegistrationEndpoint;
 import io.github.opensabre.iac.result.llm.SnapshotChatModelRouter;
+import io.github.opensabre.iac.agent.dao.AgentChatSessionMapper;
+import io.github.opensabre.iac.agent.dao.AgentMapper;
+import io.github.opensabre.iac.agent.dao.AgentVersionMapper;
+import io.github.opensabre.iac.agent.model.Agent;
+import io.github.opensabre.iac.agent.model.AgentChatSession;
+import io.github.opensabre.iac.agent.model.AgentVersion;
+import io.github.opensabre.iac.consumer.ConsumerApplication;
+import io.github.opensabre.iac.consumer.ConsumerApplicationMapper;
+import io.github.opensabre.iac.invocation.AgentInvocation;
+import io.github.opensabre.iac.invocation.AgentInvocationMapper;
+import io.github.opensabre.iac.invocation.InvocationHistory;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.metadata.ChatResponseMetadata;
+import org.springframework.ai.chat.metadata.DefaultUsage;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import io.github.opensabre.security.actuator.ActuatorMonitoringTokenIssuer;
 import io.github.opensabre.security.token.InternalTokenConstants;
 import org.junit.jupiter.api.Test;
@@ -24,6 +43,10 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.List;
+import org.mockito.ArgumentCaptor;
+
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.verify;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -62,6 +85,14 @@ public class IacPlatformApplicationTest {
 
     @Autowired
     private ActuatorMonitoringTokenIssuer actuatorMonitoringTokenIssuer;
+
+    @MockitoBean private JwtDecoder jwtDecoder;
+    @MockitoBean private ConsumerApplicationMapper applications;
+    @MockitoBean private AgentMapper agents;
+    @MockitoBean private AgentVersionMapper versions;
+    @MockitoBean private AgentChatSessionMapper sessions;
+    @MockitoBean private AgentInvocationMapper invocations;
+    @MockitoBean private SnapshotChatModelRouter modelRouter;
 
     @Test
     void loadsWithOpenSabreGovernanceAndManagedModelRouter() {
@@ -121,6 +152,77 @@ public class IacPlatformApplicationTest {
                     .GET().build(), HttpResponse.BodyHandlers.discarding());
             assertThat(response.statusCode()).as(path).isEqualTo(401);
         }
+    }
+
+    @Test
+    void verifiesPublicScopeAndLinksExecutionToStoredSessionOverHttp() throws Exception {
+        when(jwtDecoder.decode("application-token")).thenReturn(token("iac.invoke"));
+        when(jwtDecoder.decode("unscoped-token")).thenReturn(token("read"));
+
+        var app = new ConsumerApplication();
+        app.setClientId("reporting-app");
+        app.setEnabled(true);
+        app.setGrantsJson("[{\"agentId\":\"agent-1\",\"versionNo\":2}]");
+        when(applications.selectById("reporting-app")).thenReturn(app);
+        when(applications.reserve(eq("reporting-app"), eq(app.getGrantsJson()), anyLong(), anyLong())).thenReturn(1);
+        var agent = new Agent();
+        agent.setStatus("PUBLISHED");
+        when(agents.selectById("agent-1")).thenReturn(agent);
+        var version = new AgentVersion();
+        version.setAgentId("agent-1");
+        version.setVersionNo(2);
+        version.setStatus("PUBLISHED");
+        version.setConfigJson("""
+                {"schemaVersion":"3.0","systemPrompt":"Pinned prompt","primaryModelProfileId":"model",
+                 "assetSnapshots":{"primaryModel":{"id":"model"},"mcpServers":[],"skills":[],"fallbackModels":[]}}
+                """);
+        when(versions.selectOne(any())).thenReturn(version);
+        when(modelRouter.call(any(), any(), any(), any(InvocationHistory.Execution.class)))
+                .thenAnswer(invocation -> invocation.<InvocationHistory.Execution>getArgument(3)
+                        .step("MODEL", "test-model", () -> new ChatResponse(
+                                List.of(new Generation(new AssistantMessage("Hello from the published Agent"))),
+                                ChatResponseMetadata.builder().model("test-model").usage(new DefaultUsage(3, 4)).build())));
+
+        var client = HttpClient.newHttpClient();
+        var path = "/api/iac/v1/agents/agent-1/invoke";
+        assertThat(client.send(invokeRequest(path, null), HttpResponse.BodyHandlers.discarding()).statusCode()).isEqualTo(401);
+        assertThat(client.send(invokeRequest(path, "unscoped-token"), HttpResponse.BodyHandlers.discarding()).statusCode()).isEqualTo(403);
+        var before = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/iac/config/agent-sessions"))
+                .header("Authorization", "Bearer application-token").GET().build();
+        assertThat(client.send(before, HttpResponse.BodyHandlers.discarding()).statusCode()).isEqualTo(403);
+
+        var response = client.send(invokeRequest(path, "application-token"), HttpResponse.BodyHandlers.ofString());
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+        var json = new com.fasterxml.jackson.databind.ObjectMapper();
+        var reply = json.readTree(response.body()).path("data");
+        assertThat(reply.path("versionNo").asInt()).isEqualTo(2);
+        assertThat(reply.path("content").asText()).isEqualTo("Hello from the published Agent");
+        var session = ArgumentCaptor.forClass(AgentChatSession.class);
+        var execution = ArgumentCaptor.forClass(AgentInvocation.class);
+        verify(sessions).insert(session.capture());
+        verify(invocations).updateById(execution.capture());
+        assertThat(session.getValue().getId()).isEqualTo(reply.path("sessionId").asText());
+        assertThat(session.getValue().getSource()).isEqualTo("API");
+        assertThat(session.getValue().getMessagesJson()).contains(reply.path("requestId").asText());
+        assertThat(execution.getValue().getRequestId()).isEqualTo(reply.path("requestId").asText());
+        assertThat(execution.getValue().getSessionId()).isEqualTo(session.getValue().getId());
+        assertThat(execution.getValue().getStatus()).isEqualTo("SUCCEEDED");
+        assertThat(execution.getValue().getInputTokens()).isEqualTo(3);
+        assertThat(execution.getValue().getStepsJson()).contains("test-model").doesNotContain("Hello");
+    }
+
+    private HttpRequest invokeRequest(String path, String bearer) {
+        var builder = HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
+                .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString("""
+                        {"versionNo":2,"input":"Hello"}
+                        """));
+        if (bearer != null) builder.header("Authorization", "Bearer " + bearer);
+        return builder.build();
+    }
+
+    private static Jwt token(String scope) {
+        return Jwt.withTokenValue("test").header("alg", "RS256").subject("reporting-app")
+                .audience(List.of("reporting-app")).claim("scope", List.of(scope)).claim("roles", List.of()).build();
     }
 
     @TestConfiguration(proxyBeanMethods = false)

@@ -32,4 +32,7 @@ public final class IacException extends BaseException {
         return new IacException(IacErrorType.INVALID_STATE, message);
     }
 
+    public static IacException quotaExceeded(String message) {
+        return new IacException(IacErrorType.QUOTA_EXCEEDED, message);
+    }
 }

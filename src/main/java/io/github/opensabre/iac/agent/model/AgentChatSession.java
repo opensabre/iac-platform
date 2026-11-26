@@ -15,6 +15,7 @@ public class AgentChatSession extends BasePo {
     private Integer versionNo;
     private String title;
     private String source;
+    private String caller;
     private String owner;
     private String ownerGroupId;
     private String configHash;

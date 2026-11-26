@@ -2,6 +2,8 @@ package io.github.opensabre.iac.result.llm;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.opensabre.iac.invocation.InvocationHistory;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
@@ -29,6 +31,16 @@ public class SnapshotChatModelRouter {
         return call(prompt, agentSnapshot, new ToolCallback[0]);
     }
     public ChatResponse call(Prompt prompt, JsonNode agentSnapshot, ToolCallback[] callbacks) {
+        return call(prompt, agentSnapshot, callbacks, null);
+    }
+
+    /** Runs candidates in order and captures model attempts and tool execution for the current request. */
+    public ChatResponse call(Prompt prompt, JsonNode agentSnapshot, ToolCallback[] callbacks,
+                             InvocationHistory.Execution execution) {
+        if (execution != null) {
+            callbacks = java.util.Arrays.stream(callbacks)
+                    .map(callback -> measuredCallback(execution, callback)).toArray(ToolCallback[]::new);
+        }
         Prompt executablePrompt = callbacks.length == 0 ? prompt : new Prompt(prompt.getInstructions(),
                 ToolCallingChatOptions.builder().toolCallbacks(callbacks).build());
         JsonNode config=config(agentSnapshot);
@@ -39,9 +51,41 @@ public class SnapshotChatModelRouter {
         List<JsonNode> candidates=new ArrayList<>(); candidates.add(config.path("assetSnapshots").path("primaryModel"));
         config.path("assetSnapshots").path("fallbackModels").forEach(candidates::add);
         RuntimeException last=null;
-        for(JsonNode candidate:candidates) try{return create(taskModel(candidate, agentSnapshot)).call(executablePrompt);}catch(RuntimeException exception){last=exception;}
+        for (JsonNode candidate : candidates) {
+            try {
+                if (execution == null) return create(taskModel(candidate, agentSnapshot)).call(executablePrompt);
+                return execution.step("MODEL", candidate.path("modelName").asText(),
+                        () -> create(taskModel(candidate, agentSnapshot)).call(executablePrompt));
+            } catch (RuntimeException exception) {
+                last = exception;
+            }
+        }
         throw last==null?new IllegalStateException("Agent 没有可用模型快照"):last;
     }
+    private ToolCallback measuredCallback(InvocationHistory.Execution execution, ToolCallback callback) {
+        return new ToolCallback() {
+            @Override
+            public org.springframework.ai.tool.definition.ToolDefinition getToolDefinition() {
+                return callback.getToolDefinition();
+            }
+
+            @Override
+            public org.springframework.ai.tool.metadata.ToolMetadata getToolMetadata() {
+                return callback.getToolMetadata();
+            }
+
+            @Override
+            public String call(String arguments) {
+                return execution.step("TOOL", getToolDefinition().name(), () -> callback.call(arguments));
+            }
+
+            @Override
+            public String call(String arguments, ToolContext toolContext) {
+                return execution.step("TOOL", getToolDefinition().name(), () -> callback.call(arguments, toolContext));
+            }
+        };
+    }
+
     /** Apply per-task controls to a copy, including every fallback, never to published model snapshots. */
     JsonNode taskModel(JsonNode model, JsonNode snapshot) {
         JsonNode overrides = snapshot == null ? objectMapper.nullNode() : snapshot.path("taskOverrides");

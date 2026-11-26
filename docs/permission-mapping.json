@@ -200,5 +200,53 @@
       "controller": "IacMcpServerController",
       "handler": "disable"
     }
-  ]
+  ],
+  "v1Additions": {
+    "status": "proposed_pending_human_approval",
+    "resources": [
+      {
+        "code": "iac:agent-session:execution-query",
+        "method": "GET",
+        "path": "/api/iac/config/agent-sessions/executions",
+        "sourceRoleResource": "iqc:agent-session:detail"
+      },
+      {
+        "code": "iac:consumer:list",
+        "method": "GET",
+        "path": "/api/iac/config/consumer-applications",
+        "roles": [
+          "ADMIN",
+          "SUPER_ADMIN"
+        ]
+      },
+      {
+        "code": "iac:consumer:create",
+        "method": "POST",
+        "path": "/api/iac/config/consumer-applications",
+        "roles": [
+          "ADMIN",
+          "SUPER_ADMIN"
+        ]
+      },
+      {
+        "code": "iac:consumer:update",
+        "method": "PUT",
+        "path": "/api/iac/config/consumer-applications/{clientId}",
+        "roles": [
+          "ADMIN",
+          "SUPER_ADMIN"
+        ]
+      }
+    ],
+    "menu": {
+      "label": "接入应用",
+      "href": "/iqc/agent-applications",
+      "parent": "智能体管理",
+      "perm": "iac:consumer:list",
+      "buttons": [
+        "iac:consumer:create",
+        "iac:consumer:update"
+      ]
+    }
+  }
 }

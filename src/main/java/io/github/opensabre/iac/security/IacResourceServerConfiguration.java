@@ -1,6 +1,9 @@
 package io.github.opensabre.iac.security;
 
+import io.github.opensabre.iac.consumer.ConsumerApplicationService;
 import io.github.opensabre.security.actuator.ActuatorMonitoringAccess;
+import org.springframework.http.HttpMethod;
+import org.springframework.security.authorization.AuthorizationDecision;
 import io.github.opensabre.security.webmvc.InternalTokenAuthenticationFilter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -36,6 +39,16 @@ public class IacResourceServerConfiguration {
                         .hasAnyAuthority("SCOPE_actuator.read", ActuatorMonitoringAccess.AUTHORITY)
                         .requestMatchers("/actuator/**")
                         .hasAuthority("SCOPE_actuator.read")
+                        .requestMatchers(HttpMethod.POST, "/api/iac/v1/agents/*/invoke")
+                        .hasAuthority("SCOPE_" + ConsumerApplicationService.INVOKE_SCOPE)
+                        .requestMatchers("/api/iac/config/**", "/api/iac/agent-assets/**")
+                        .access((authentication, context) -> {
+                            var identity = authentication.get();
+                            boolean application = identity.getAuthorities().stream().anyMatch(authority ->
+                                    ("SCOPE_" + ConsumerApplicationService.INVOKE_SCOPE).equals(authority.getAuthority()));
+                            return new AuthorizationDecision(identity.isAuthenticated() && !application
+                                    && !(identity instanceof org.springframework.security.authentication.AnonymousAuthenticationToken));
+                        })
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(resourceServer -> resourceServer
                         .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter)))

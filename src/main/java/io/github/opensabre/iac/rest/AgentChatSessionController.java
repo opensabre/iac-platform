@@ -1,6 +1,8 @@
 package io.github.opensabre.iac.rest;
 
 import io.github.opensabre.boot.annotations.ResourcePermission;
+import io.github.opensabre.governance.audit.annotations.Audit;
+import io.github.opensabre.governance.audit.annotations.OperationType;
 import io.github.opensabre.iac.agent.AgentChatSessionService;
 import io.github.opensabre.iac.shared.IacPage;
 import io.swagger.v3.oas.annotations.Operation;
@@ -25,13 +27,19 @@ public class AgentChatSessionController {
             @RequestParam(defaultValue="1") long current, @RequestParam(defaultValue="10") long size,
             @RequestParam(required=false) String title, @RequestParam(required=false) String owner,
             @RequestParam(required=false) @DateTimeFormat(iso=DateTimeFormat.ISO.DATE_TIME) LocalDateTime startedFrom,
-            @RequestParam(required=false) @DateTimeFormat(iso=DateTimeFormat.ISO.DATE_TIME) LocalDateTime startedTo) {
-        return service.page(agentId, current, size, title, owner, startedFrom, startedTo);
+            @RequestParam(required=false) @DateTimeFormat(iso=DateTimeFormat.ISO.DATE_TIME) LocalDateTime startedTo,
+            @RequestParam(required=false) String sessionId, @RequestParam(required=false) Integer versionNo,
+            @RequestParam(required=false) String source, @RequestParam(required=false) String caller,
+            @RequestParam(required=false) String executionStatus) {
+        return service.page(agentId, current, size, title, owner, startedFrom, startedTo,
+                new AgentChatSessionService.Filters(sessionId, versionNo, source, caller, executionStatus));
     }
 
     @GetMapping("/{sessionId}")
     @Operation(summary = "查看智能体会话消息及调用信息")
     @ResourcePermission(code="iac:agent-session:detail", name="查看智能体会话详情", type="iac", description="查看智能体会话详情")
+    @Audit(operationType = OperationType.QUERY, description = "查看智能体会话正文", module = "iac-agent-session",
+            request = false, response = false, key = "#sessionId")
     public AgentChatSessionService.Detail detail(@PathVariable String agentId, @PathVariable String sessionId) {
         return service.detail(agentId, sessionId);
     }

@@ -1,5 +1,11 @@
 package io.github.opensabre.iac.integration;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.MybatisSqlSessionFactoryBuilder;
+import io.github.opensabre.iac.consumer.ConsumerApplicationMapper;
+import org.apache.ibatis.datasource.unpooled.UnpooledDataSource;
+import org.apache.ibatis.mapping.Environment;
+import org.apache.ibatis.transaction.jdbc.JdbcTransactionFactory;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import java.nio.file.Files;
@@ -16,15 +22,9 @@ class IacMigrationMysqlIT {
     private static final String SERVER = "jdbc:mysql://127.0.0.1:34309/";
     private static final String OPTIONS = "?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=UTF-8";
     @Test void freshBaselineAndHistoricalImportPreserveAllSevenTables() throws Exception {
-        String directory = System.getenv("IAC_MYSQL_VALIDATION_DIR");
-        assertThat(directory).startsWith("/private/tmp/iac-mysql-validation.");
+        String directory = verifyIsolatedDatabase();
         String sourceMigrations = System.getenv("IAC_SOURCE_MIGRATIONS_DIR");
         assertThat(sourceMigrations).startsWith("/private/tmp/iqc-iac-split/");
-        try (var connection = DriverManager.getConnection(SERVER + OPTIONS,"root","");
-             var statement = connection.createStatement(); var row = statement.executeQuery("SELECT @@port,@@datadir")) {
-            assertThat(row.next()).isTrue(); assertThat(row.getInt(1)).isEqualTo(34309);
-            assertThat(row.getString(2)).isEqualTo(directory + "/data/");
-        }
         String suffix = UUID.randomUUID().toString().replace("-", "");
         String source = "iqc_import_" + suffix, target = "iac_import_" + suffix;
         try (var connection = DriverManager.getConnection(SERVER + OPTIONS,"root",""); var statement = connection.createStatement()) {
@@ -36,7 +36,7 @@ class IacMigrationMysqlIT {
         original.migrate(); original.validate();
         var destination = Flyway.configure().dataSource(SERVER+target+OPTIONS,"root","")
                 .locations("classpath:db/migration/mysql").load();
-        assertThat(destination.migrate().migrationsExecuted).isEqualTo(2);
+        assertThat(destination.migrate().migrationsExecuted).isEqualTo(5);
         destination.validate(); assertThat(destination.migrate().migrationsExecuted).isZero();
         try (var connection = DriverManager.getConnection(SERVER+source+OPTIONS,"root",""); var statement = connection.createStatement()) {
             // Include text resembling source table names to catch unsafe global SQL replacements.
@@ -81,9 +81,75 @@ class IacMigrationMysqlIT {
         assertThat(proof.path("verified").asBoolean()).isTrue();
         assertThat(proof.path("tables").size()).isEqualTo(7);
         proof.path("tables").forEach(table -> assertThat(table.path("rows").asInt()).isEqualTo(1));
+        try (var connection = DriverManager.getConnection(SERVER + target + OPTIONS, "root", "");
+             var statement = connection.createStatement();
+             var rows = statement.executeQuery("SELECT caller FROM iac_agent_chat_session WHERE id = 'session-a'")) {
+            assertThat(rows.next()).isTrue();
+            assertThat(rows.getString(1)).isEqualTo("alice");
+        }
         var repeated = new ProcessBuilder(command).redirectErrorStream(true).start();
         String repeatedOutput = new String(repeated.getInputStream().readAllBytes());
         assertThat(repeated.waitFor()).isEqualTo(1); assertThat(repeatedOutput).contains("must all be empty");
         destination.validate(); assertThat(destination.migrate().migrationsExecuted).isZero();
+    }
+    @Test
+    void upgradesDeployedHistoryAndEnforcesBothQuotaWindows() throws Exception {
+        verifyIsolatedDatabase();
+        String database = "iac_upgrade_" + UUID.randomUUID().toString().replace("-", "");
+        String url = SERVER + database + OPTIONS;
+        try (var connection = DriverManager.getConnection(SERVER + OPTIONS, "root", "");
+             var sql = connection.createStatement()) {
+            sql.execute("CREATE DATABASE " + database + " CHARACTER SET utf8mb4");
+        }
+        var old = Flyway.configure().dataSource(url, "root", "").locations("classpath:db/migration/mysql")
+                .target("1.0.1").load();
+        assertThat(old.migrate().migrationsExecuted).isEqualTo(2);
+        try (var connection = DriverManager.getConnection(url, "root", ""); var sql = connection.createStatement()) {
+            sql.execute("""
+                    INSERT INTO iac_agent_chat_session
+                      (id, agent_id, version_no, title, source, owner, config_hash, message_count, messages_json,
+                       last_message_time, created_time, updated_time)
+                    VALUES ('old', 'agent', 1, 'original', 'TEST', 'alice', 'hash', 0, '[]', NOW(), NOW(), NOW())
+                    """);
+        }
+        var destination = Flyway.configure().dataSource(url, "root", "").locations("classpath:db/migration/mysql").load();
+        assertThat(destination.migrate().migrationsExecuted).isEqualTo(3);
+        destination.validate();
+        assertThat(destination.migrate().migrationsExecuted).isZero();
+        try (var connection = DriverManager.getConnection(url, "root", ""); var sql = connection.createStatement();
+             var rows = sql.executeQuery("SELECT caller, title FROM iac_agent_chat_session WHERE id = 'old'")) {
+            assertThat(rows.next()).isTrue();
+            assertThat(rows.getString(1)).isEqualTo("alice");
+            assertThat(rows.getString(2)).isEqualTo("original");
+            sql.execute("""
+                    INSERT INTO iac_consumer_application
+                      (client_id, display_name, enabled, per_minute, per_day, grants_json)
+                    VALUES ('app', 'App', TRUE, 1, 2, '[]')
+                    """);
+        }
+        var datasource = new UnpooledDataSource("com.mysql.cj.jdbc.Driver", url, "root", "");
+        var config = new MybatisConfiguration(new Environment("isolated", new JdbcTransactionFactory(), datasource));
+        config.addMapper(ConsumerApplicationMapper.class);
+        try (var session = new MybatisSqlSessionFactoryBuilder().build(config).openSession(true)) {
+            var quota = session.getMapper(ConsumerApplicationMapper.class);
+            assertThat(quota.reserve("app", "[]", 10, 0)).isOne();
+            assertThat(quota.reserve("app", "[]", 10, 0)).isZero();
+            assertThat(quota.reserve("app", "[]", 11, 0)).isOne();
+            assertThat(quota.reserve("app", "[]", 12, 0)).isZero();
+            assertThat(quota.reserve("app", "[]", 1440, 1)).isOne();
+            assertThat(quota.reserve("app", "not-current", 1441, 1)).isZero();
+        }
+    }
+
+    private static String verifyIsolatedDatabase() throws Exception {
+        String directory = System.getenv("IAC_MYSQL_VALIDATION_DIR");
+        assertThat(directory).startsWith("/private/tmp/iac-mysql-validation.");
+        try (var connection = DriverManager.getConnection(SERVER + OPTIONS, "root", "");
+             var statement = connection.createStatement(); var row = statement.executeQuery("SELECT @@port,@@datadir")) {
+            assertThat(row.next()).isTrue();
+            assertThat(row.getInt(1)).isEqualTo(34309);
+            assertThat(row.getString(2)).isEqualTo(directory + "/data/");
+        }
+        return directory;
     }
 }

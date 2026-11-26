@@ -15,13 +15,20 @@ public class EnvironmentSecretReferenceResolver implements SecretReferenceResolv
     public EnvironmentSecretReferenceResolver(Environment environment, StringEncryptor encryptor) { this.environment = environment; this.encryptor = encryptor; }
     @Override public String resolve(String reference) {
         if (reference != null && reference.startsWith("ENC(")) {
-            if (encryptor == null) throw new IllegalStateException("加密密钥解密器未配置");
-            return encryptor.decrypt(reference.substring(4, reference.length() - 1));
+            if (encryptor == null || !reference.endsWith(")") || reference.length() <= 5)
+                throw new SecretReferenceException();
+            try {
+                String value = encryptor.decrypt(reference.substring(4, reference.length() - 1));
+                if (value != null && !value.isBlank()) return value;
+            } catch (RuntimeException ignored) {
+                // Decryption errors can include details about the configured secret.
+            }
+            throw new SecretReferenceException();
         }
         if (reference == null || !reference.matches("env:[A-Z][A-Z0-9_]{1,127}"))
-            throw new IllegalArgumentException("密钥配置格式无效，仅支持 env:NAME 或 ENC(...) 引用");
+            throw new SecretReferenceException.InvalidFormat();
         String value = environment.getProperty(reference.substring(4));
-        if (value == null || value.isBlank()) throw new IllegalStateException("模型密钥引用未配置");
+        if (value == null || value.isBlank()) throw new SecretReferenceException();
         return value;
     }
 }

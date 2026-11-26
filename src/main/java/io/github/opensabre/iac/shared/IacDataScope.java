@@ -24,9 +24,13 @@ public class IacDataScope {
     }
 
     public boolean canViewAll() {
+        return isAdministrator() || effectiveScopes().contains("iac:session:all");
+    }
+
+    /** Checks the platform role independently of permissions for reading session data. */
+    public boolean isAdministrator() {
         return effectiveRoles().stream().map(this::normalizeRole)
-                        .anyMatch(role -> role.equals("ADMIN") || role.equals("SUPER_ADMIN"))
-                || effectiveScopes().contains("iac:session:all");
+                .anyMatch(role -> role.equals("ADMIN") || role.equals("SUPER_ADMIN"));
     }
 
     /** Uses the trusted internal context first, then the verified external JWT context. */
